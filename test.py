@@ -91,3 +91,12 @@ def random_song(num:int):
         nn_test(random_id)
         list_id.append(nn_test(random_id))
     return list_id
+
+
+@app.get("/url_download")
+def get_url(music_id):
+    url = s3_client.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': Bucket, 'Key': f'{music_id}.mp3'},
+        ExpiresIn=600)
+    return url
