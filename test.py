@@ -11,6 +11,8 @@ from langdetect import detect, DetectorFactory
 import random
 from utils import lyrics_tsv, app, s3_client, Bucket
 from pydub import AudioSegment
+import os
+from glob import glob
 
 
 @app.get("/nn_timecode")
@@ -254,4 +256,6 @@ def piece_test(music_id):
     avg_r = sum(list_ratio) / len(list_ratio)
     final_info = {"idS3": music_id, "songLyrics": main_list, "meta": " ", "author": "Untitled", "title": "Untitled",
                   "minRatio": min_r, "averageRatio": avg_r}
+    '''for file in glob('/temp/*.mp3'):
+        os.remove(file)'''
     return final_info
