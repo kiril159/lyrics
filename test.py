@@ -3,16 +3,21 @@ import ssl
 import json
 import re
 from fuzzywuzzy import fuzz as f
-# from pprint import pprint
-from fastapi import FastAPI
-import boto3
-import csv
 from langdetect import detect, DetectorFactory
 import random
 from utils import lyrics_tsv, app, s3_client, Bucket
 from pydub import AudioSegment
-import os
-from glob import glob
+import glob, os
+from graphql import get_table_from_graphql, create_entry, update_entry
+
+
+@app.get("/url_download")
+def get_url(music_id):
+    url = s3_client.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': Bucket, 'Key': f'{music_id}.mp3'},
+        ExpiresIn=600)
+    return url
 
 
 @app.get("/nn_timecode")
@@ -22,14 +27,20 @@ def nn_timecode(music_id):
 
     ssl._create_default_https_context = ssl._create_unverified_context
     s3_client.download_file(Bucket, f'{music_id}.mp3', f'{music_id}.mp3')
+    with open(f'{music_id}.txt', "w") as song_text:
+        song_text.write(lyrics_tsv[music_id])
 
     audio = whisper.load_audio(f'{music_id}.mp3')
 
     # подгрузка модели
-    model = whisper.load_model("base", device="cpu")
+    model = whisper.load_model("base.en" if lang == 'en' else "base", device="cpu")
+
+    text_music = open(f'{music_id}.txt', 'r').read()
+    array_line_music = re.sub(r'[^\w\s]', '', text_music.replace("\\n", "\n").replace("\n\n", "\n")).split("\n")
 
     # распознание слов
-    result = whisper.transcribe(model, audio, language=lang, condition_on_previous_text=False)["segments"]
+    result = whisper.transcribe(model, audio, language=lang, condition_on_previous_text=False,
+                                initial_prompt=array_line_music[0], temperature=(0.0, 0.2, 0.4, 0.6))["segments"]
 
     # вытаскиваем слова из ответа нейронки
     word_list = []
@@ -42,9 +53,11 @@ def nn_timecode(music_id):
     # читаем оригинальный текс, удаляем знаки препинания и формируем лист из строк песни
     # array_line_music = str(lyrics_tsv[f'{music_id}']).replace("\\n", "\n").replace("\n\n", "\n").split("\n")
     # array_line_music = re.sub(r'[^\w\s]', '', text_music).split("\n")
-    text_music = lyrics_tsv[f'{music_id}']
-    array_line_music = re.sub(r'[^\w\s]', '', text_music.replace("\n\n", "\n").replace("\\n", "\n")).split("\n")
+    '''text_music = lyrics_tsv[f'{music_id}']
+    array_line_music = re.sub(r'[^\w\s]', '', text_music.replace("\n\n", "\n").replace("\\n", "\n")).split("\n")'''
 
+    '''text_music = open(f'{music_id}.txt', 'r').read()
+    array_line_music = re.sub(r'[^\w\s]', '', text_music.replace("\n\n", "\n")).split("\n")'''
     main_list = []
     obj = word_list
     for i in obj:
@@ -76,8 +89,24 @@ def nn_timecode(music_id):
     avg_r = sum(list_ratio) / len(list_ratio)
     file = open(f'{music_id}.json', 'w')
     file.write(json.dumps(main_list, ensure_ascii=False, indent=4))
-    final_info = {"idS3": music_id, "songLyrics": main_list, "meta": " ", "author": "Untitled", "title": "Untitled",
-                  "minRatio": min_r, "averageRatio": avg_r, "language": lang}
+    final_info = {
+        "idS3": music_id,
+        "songLyrics": main_list,
+        "meta": {},
+        "published": 'true' if (list_ratio.count(0) <= 2 and avg_r >= 50) else 'false',
+        "Author": 'Untitled',
+        "Title": "Untitled",
+        "minRatio": min_r,
+        "averageRatio": avg_r,
+        "language": lang}
+
+    if get_table_from_graphql('Music', music_id):
+        create_entry('Music', final_info)
+    else:
+        personal_id = get_table_from_graphql('Music', music_id)[0]['data']['id']
+        update_entry('Music', personal_id, final_info)
+    for files in glob.glob(f"{music_id}*"):
+        os.remove(files)
     return final_info
 
 
@@ -160,14 +189,6 @@ def random_songs(num: int):
         list_id.append(nn_test(random_id))
     return list_id
 
-
-@app.get("/url_download")
-def get_url(music_id):
-    url = s3_client.generate_presigned_url(
-        'get_object',
-        Params={'Bucket': Bucket, 'Key': f'{music_id}.mp3'},
-        ExpiresIn=600)
-    return url
 
 
 @app.get("/piece_test")
@@ -254,8 +275,21 @@ def piece_test(music_id):
     file.write(json.dumps(main_list, ensure_ascii=False, indent=4))
     min_r = min(list_ratio)
     avg_r = sum(list_ratio) / len(list_ratio)
-    final_info = {"idS3": music_id, "songLyrics": main_list, "meta": " ", "author": "Untitled", "title": "Untitled",
-                  "minRatio": min_r, "averageRatio": avg_r}
+    final_info = {
+        "idS3": music_id,
+        "songLyrics": main_list,
+        "meta": {},
+        "published": 'true',
+        "Author": 'Untitled',
+        "Title": "Untitled",
+        "minRatio": min_r,
+        "averageRatio": avg_r,
+        "language": lang}
     '''for file in glob('/temp/*.mp3'):
         os.remove(file)'''
+    if get_table_from_graphql('Music', music_id):
+        create_entry('Music', final_info)
+    else:
+        personal_id = get_table_from_graphql('Music', music_id)[0]['data']['id']
+        update_entry('Music', personal_id, final_info)
     return final_info
